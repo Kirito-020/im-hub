@@ -1,3 +1,65 @@
+server:
+  port: 8081
+  shutdown: graceful
+
 spring:
   application:
     name: im-hub-server
+  datasource:
+    url: jdbc:mysql://localhost:3306/im_hub?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD:6666}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 3000ms
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      acks: all                        # 等所有副本确认，配合幂等生产者
+      retries: 3
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+    consumer:
+      group-id: im-side-effect
+      auto-offset-reset: earliest
+      enable-auto-commit: false        # 手动 ack，避免“先提交后处理”
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      ack-mode: manual_immediate
+      missing-topics-fatal: false
+  servlet:
+    multipart:
+      max-file-size: 10MB              # 不配这里，im.upload.max-size 写了也没用
+      max-request-size: 12MB
+  jackson:
+    default-property-inclusion: non_null
+    time-zone: Asia/Shanghai
+    date-format: yyyy-MM-dd HH:mm:ss   # 前端按这个格式解析
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+
+im:
+  instance-id: ${IM_INSTANCE_ID:node-1}
+  jwt:
+    secret: ${JWT_SECRET:im-hub-dev-secret-please-change-me-32bytes-minimum}
+    access-ttl: 15m
+    refresh-ttl: 7d
+  ws:
+    ticket-ttl: 30s
+  sla: { p1: 4h, p2: 8h, p3: 24h, p4: 72h }
+  rate-limit: { msg-per-10s: 10 }
+  upload:
+    dir: ./uploads
+    max-size: 10485760
