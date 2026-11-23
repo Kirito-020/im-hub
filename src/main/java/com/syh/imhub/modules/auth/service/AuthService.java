@@ -3,16 +3,21 @@ package com.syh.imhub.modules.auth.service;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.syh.imhub.common.exception.BizException;
 import com.syh.imhub.common.exception.ErrorCode;
+import com.syh.imhub.modules.auth.dto.LoginReq;
 import com.syh.imhub.modules.auth.dto.LoginResp;
 import com.syh.imhub.modules.auth.dto.RegisterReq;
 import com.syh.imhub.modules.user.entity.ImUser;
 import com.syh.imhub.modules.user.mapper.ImUserMapper;
+import jakarta.validation.Valid;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+
 
 @Service
 public class AuthService {
@@ -20,10 +25,14 @@ public class AuthService {
     private final JwtService jwtService;
     private final ImUserMapper imUserMapper;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    private final StringRedisTemplate redis;
+    private static final int MAX_LOGIN_FAILS = 10;
+    private static final Duration LOGIN_LOCK = Duration.ofMinutes(5);
 
-    public AuthService(JwtService jwtService, ImUserMapper imUserMapper) {
+    public AuthService(JwtService jwtService, ImUserMapper imUserMapper, StringRedisTemplate redis) {
         this.jwtService = jwtService;
         this.imUserMapper = imUserMapper;
+        this.redis = redis;
     }
 
     public LoginResp register(RegisterReq req) {
@@ -53,6 +62,40 @@ public class AuthService {
         //注册即登录，直接签发 JWT，前端不必再调用登录接口
         return issue(user);
     }
+
+    public LoginResp login(LoginReq req) {
+        //统一将用户名转为小写且去除首尾空格
+        String username = req.username().trim().toLowerCase(Locale.ROOT);
+        //失败计数
+        String failKey = "auth:login:fail:" + username;
+        //读取失败次数
+        String fails = redis.opsForValue().get(failKey);
+        //如果失败次数达到一定次数则返回错误
+        if (fails != null && Integer.parseInt(fails) >= MAX_LOGIN_FAILS) {
+            throw BizException.of(ErrorCode.RATE_LIMITED, "登录失败次数过多，请5分钟再试");
+        }
+        ImUser user = imUserMapper.selectOne(Wrappers.<ImUser>lambdaQuery().eq(ImUser::getUsername, username));
+        //用户名或密码错误合并成一个分支，避免泄露用户是否存在
+        if (user == null || !passwordEncoder.matches(req.password(), user.getPassword())) {
+            //记录失败次数
+            Long count = redis.opsForValue().increment(failKey);
+            //只在第一次失败时设置过期时间（防止redis被大量无效失败请求撑爆）
+            if (count != null && count == 1) {
+                redis.expire(failKey, LOGIN_LOCK);
+            }
+            //抛异常
+            throw BizException.of(ErrorCode.UNAUTHORIZED, "用户名或密码错误");
+        }
+        //判断用户状态是否正常
+        if(user.getStatus() != null && user.getStatus() == 0){
+            //抛异常
+            throw BizException.of(ErrorCode.FORBIDDEN, "用户状态异常");
+        }
+        //登陆成功清零失败次数
+        redis.delete(failKey);
+        return issue(user);
+    }
+
 
     private LoginResp issue(ImUser user) {
         //签发 JWT
@@ -117,4 +160,6 @@ public class AuthService {
         return list;
 
     }
+
+
 }

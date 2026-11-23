@@ -1,6 +1,7 @@
 package com.syh.imhub.modules.auth.controller;
 
 import com.syh.imhub.common.result.R;
+import com.syh.imhub.modules.auth.dto.LoginReq;
 import com.syh.imhub.modules.auth.dto.LoginResp;
 import com.syh.imhub.modules.auth.dto.RegisterReq;
 import com.syh.imhub.modules.auth.service.AuthService;
@@ -23,6 +24,11 @@ public class AuthController {
     public R<LoginResp> register(@Valid @RequestBody RegisterReq req){
         return R.ok(authService.register(req));
 
+    }
+
+    @PostMapping("/login")
+    public R<LoginResp> login(@Valid @RequestBody LoginReq req){
+        return R.ok(authService.login(req));
     }
 
 }

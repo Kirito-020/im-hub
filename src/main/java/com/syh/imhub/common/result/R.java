@@ -7,11 +7,11 @@ public record R<T>(int code, String msg, T data, String traceId) {
         return new R<>(0, "ok", data, null);
     }
     // 无数据成功
-    public static <T> R<T> fail() {
+    public static <T> R<T> ok() {
         return new R<>(0, "ok", null, null);
     }
     //失败
-    public static <T> R<T> error(int code, String msg) {
+    public static <T> R<T> fail(int code, String msg) {
         return new R<>(code, msg, null, null);
     }
 }
