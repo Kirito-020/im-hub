@@ -6,6 +6,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import jakarta.validation.constraints.NotBlank;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -16,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class JwtService {
@@ -38,6 +40,32 @@ public class JwtService {
         this.instanceId = instanceId;
     }
 
+    public TokenPair refresh(String refreshToken) {
+        //先做签名、有效期、黑名单的校验
+        Claims claims = parse(refreshToken);
+        if (!"refresh".equals(claims.get("typ", String.class))) {
+            throw BizException.of(ErrorCode.UNAUTHORIZED, "刷新令牌无效");
+        }
+        //取用户ID
+        Long userId = Long.valueOf(claims.getSubject());
+        //取redis中的refresh token，判断收否被修改或被删除
+        String storedRefreshToken = redis.opsForValue().get("auth:refresh:" + userId);
+        if (storedRefreshToken == null || !storedRefreshToken.equals(refreshToken)) {
+            throw BizException.of(ErrorCode.UNAUTHORIZED, "刷新令牌无效");
+        }
+        //签发新的access token和refresh token
+        String role = claims.get("role", String.class);
+        return issue(userId, role);
+    }
+
+    public void logout(Long userId, String jti, long expiresAt) {
+        //设置过期时间,黑名单只需要保持到令牌自动过期
+        long ttl = Math.max(1, expiresAt - System.currentTimeMillis());
+        //将User加入黑名单
+        redis.opsForValue().set("auth:jti:blacklist:" + jti, instanceId, ttl, TimeUnit.MILLISECONDS);
+        //将refresh token从redis中删除
+        redis.delete("auth:refresh:" + userId);
+    }
 
 
     public record TokenPair(String accessToken, String refreshToken, long expiresInSeconds, String jti) {
@@ -82,12 +110,11 @@ public class JwtService {
     }
 
 
-
     public AuthedUser authenticate(String token) {
         //先做签名、有效期、黑名单的校验
         Claims claims = parse(token);
         //判断令牌类型
-        if(!"access".equals(claims.get("typ", String.class))){
+        if (!"access".equals(claims.get("typ", String.class))) {
             throw BizException.of(ErrorCode.UNAUTHORIZED, "token类型错误");
         }
         //返回认证用户信息
@@ -97,14 +124,15 @@ public class JwtService {
 
     public record AuthedUser(Long userId, String role, String jti, long expiresAt) {
     }
+
     private Claims parse(String token) {
         try {
             //验签+校验exp
-            Claims claims=Jwts.parser().verifyWith(key).build().parseSignedClaims(token).getPayload();
+            Claims claims = Jwts.parser().verifyWith(key).build().parseSignedClaims(token).getPayload();
             //校验jti
             String jti = claims.get("jti", String.class);
             if (jti != null && redis.hasKey("auth:jti:blacklist:" + jti)) {
-                throw  BizException.of(ErrorCode.UNAUTHORIZED, "登录已失效，请重新登录");
+                throw BizException.of(ErrorCode.UNAUTHORIZED, "登录已失效，请重新登录");
             }
             //检验通过
             return claims;
