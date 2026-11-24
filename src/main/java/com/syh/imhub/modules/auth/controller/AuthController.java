@@ -10,10 +10,7 @@ import com.syh.imhub.modules.auth.service.JwtService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
@@ -58,6 +55,11 @@ public class AuthController {
         UserContext.Principal principal = UserContext.require();
         jwtService.logout(principal.userId(), principal.jti(), principal.expiresAt());
         return R.ok();
+    }
+
+    @GetMapping("/me")
+    public R<LoginResp.UserInfo> me(){
+        return R.ok(authService.me(UserContext.userId()));
     }
 
 }
