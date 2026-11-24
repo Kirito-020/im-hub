@@ -2,7 +2,6 @@ package com.syh.imhub.common.context;
 
 import com.syh.imhub.common.exception.BizException;
 import com.syh.imhub.common.exception.ErrorCode;
-import com.syh.imhub.modules.user.entity.ImUser;
 
 public class UserContext {
 
@@ -33,9 +32,5 @@ public class UserContext {
             throw new BizException(ErrorCode.UNAUTHORIZED);
         }
         return principal;
-    }
-
-    public static Long userId() {
-        return require().userId();
     }
 }

@@ -162,12 +162,4 @@ public class AuthService {
     }
 
 
-    public LoginResp.UserInfo me(Long userId) {
-        //根据用户ID查询用户信息
-        ImUser user = imUserMapper.selectById(userId);
-        if(user == null){
-            throw BizException.of(ErrorCode.NOT_FOUND, "用户不存在");
-        }
-        return toInfo(user);
-    }
 }
