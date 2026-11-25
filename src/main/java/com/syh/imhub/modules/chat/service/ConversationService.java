@@ -3,8 +3,11 @@ package com.syh.imhub.modules.chat.service;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.syh.imhub.common.exception.BizException;
+import com.syh.imhub.common.exception.ErrorCode;
 import com.syh.imhub.infra.ws.PresenceService;
 import com.syh.imhub.modules.chat.dto.ConversationVO;
+import com.syh.imhub.modules.chat.dto.CreatConversationReq;
 import com.syh.imhub.modules.chat.dto.MessageVO;
 import com.syh.imhub.modules.chat.eneity.ImConversation;
 import com.syh.imhub.modules.chat.eneity.ImConversationMember;
@@ -14,8 +17,13 @@ import com.syh.imhub.modules.chat.mapper.ImConversationMemberMapper;
 import com.syh.imhub.modules.chat.mapper.ImMessageMapper;
 import com.syh.imhub.modules.user.entity.ImUser;
 import com.syh.imhub.modules.user.mapper.ImUserMapper;
+import jakarta.validation.Valid;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import javax.xml.crypto.Data;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -170,5 +178,158 @@ public class ConversationService {
         return new MessageVO(lastMessage.getId(), lastMessage.getConversationId(), lastMessage.getSeq(),
                 lastMessage.getSenderId(), nickname, avatar, lastMessage.getType(), lastMessage.getContent(),
                 extra, lastMessage.getStatus(),lastMessage.getClientMsgId(), lastMessage.getCreatedAt());
+    }
+
+    @Transactional
+    public ConversationVO createConversation(Long userId, @Valid CreatConversationReq req) {
+        //类型为空按单聊处理
+        int type = req.type() == null ? 1 : req.type();
+        //单聊分支
+        if(type == 1){
+            //必须指定用户，不能跟自己聊
+            if(req.targetUserId() == null || Objects.equals(req.targetUserId(), userId)){
+                throw new BizException(ErrorCode.PARAM_INVALID,"请选择聊天对象");
+            }
+            //确定对端用户存在
+            ImUser targetUser = userMapper.selectById(req.targetUserId());
+            //如果对端用户不存在，抛出异常
+            if(targetUser == null){
+                throw BizException.of(ErrorCode.NOT_FOUND,"用户不存在");
+            }
+            //bizkey构建
+            String bizKey = Math.min(userId, req.targetUserId()) + ":" + Math.max(userId, req.targetUserId());
+            //查看会话是否存在
+            ImConversation conversation = conversationMapper.selectByBizKey(bizKey);
+            //如果会话存在，直接返回
+            if(conversation != null){
+                return detail(conversation.getId(), userId);
+            }
+            //创建会话
+            conversation = new ImConversation();
+            conversation.setBizKey(bizKey);
+            //类型单聊
+            conversation.setType(type);
+            //状态正常
+            conversation.setStatus(1);
+            //群主：单聊默认没有群主(0)
+            conversation.setOwnerId(0L);
+            //lastmessageid:0
+            conversation.setLastMsgId(0L);
+            //单聊默认展示对方昵称
+            conversation.setTitle("");
+            //并发插入会话可能会插入同一个bizkey
+            try {
+                //插入会话
+                conversationMapper.insert(conversation);
+            } catch (DuplicateKeyException e) {
+                //并发创建单聊：回查会话
+                ImConversation current = conversationMapper.selectByBizKey(bizKey);
+                if(current != null){
+                    return detail(current.getId(), userId);
+                }
+                //会话已存在，抛异常
+                throw BizException.of(ErrorCode.CONFLICT,"会话已存在");
+            }
+            //将用户信息插入会话成员表
+            addMember(conversation.getId(), userId, 0);
+            addMember(conversation.getId(), req.targetUserId(), 0);
+            //返回会话详情
+            return detail(conversation.getId(), userId);
+        }
+        //群聊分支
+        ImConversation conversation = new ImConversation();
+        //type=2
+        conversation.setType(type);
+        //bizkey
+        conversation.setBizKey("group:" + UUID.randomUUID());
+        //群名
+        conversation.setTitle(req.title() == null ? "新的群聊" : req.title().trim());
+        //群主是创建者
+        conversation.setOwnerId(userId);
+        //状态
+        conversation.setStatus(1);
+        //lastmessageid:0
+        conversation.setLastMsgId(0L);
+        //插入群会话
+        conversationMapper.insert(conversation);
+        //群主入群
+        addMember(conversation.getId(), userId, 2);
+        //成员入群
+        if(req.memberIds() != null){
+            for (Long memberId : req.memberIds()) {
+                //跳过自己,并且跳过空已注销用户
+                if(!Objects.equals(memberId, userId) && userMapper.selectById(memberId) != null){
+                    addMember(conversation.getId(), memberId, 1);
+                }
+            }
+        }
+        //返回会话详情
+        return detail(conversation.getId(), userId);
+    }
+
+    private void addMember(Long conversationId, Long userId, int memberRole) {
+        //先判断成员是否存在
+        ImConversationMember exist = memberMapper.selectByConversationIdAndUserId(conversationId, userId);
+        //存在
+        if (exist != null) {
+            //只有曾经的群主可以重新加入
+            if(exist.getLeftAt() != null){
+                LocalDateTime now = LocalDateTime.now();
+                memberMapper.updateById(exist.getId(), now,null,memberRole);
+            }
+            //仍然在会话中
+            return;
+        }
+        //不存在，插入成员
+        ImConversationMember member = new ImConversationMember();
+        //会话ID
+        member.setConversationId(conversationId);
+        member.setUserId(userId);
+        member.setMemberRole(memberRole);
+        member.setReadSeq(0L);
+        member.setPinned(0);
+        //默认免打扰
+        member.setMuted(0);
+        //入群时间
+        member.setJoinedAt(LocalDateTime.now());
+        memberMapper.insert(member);
+    }
+
+    private ConversationVO detail(Long conversationId, Long userId) {
+        //先做成员校验
+        requireMember(conversationId, userId);
+        //取会话本体
+        ImConversation conversation = conversationMapper.selectById(conversationId);
+        //取会话成员的全部记录
+        List<ImConversationMember> members = memberMapper.selectList(Wrappers.<ImConversationMember>lambdaQuery()
+                .eq(ImConversationMember::getConversationId, conversationId));
+        // 收集成员用户 ID
+        Set<Long> userIds = members.stream().map(ImConversationMember::getUserId).collect(Collectors.toSet());
+        //以此查所有成员信息
+        Map<Long, ImUser> users = userMapper.selectBatchIds(userIds).stream()
+                .collect(Collectors.toMap(ImUser::getId,u -> u));
+        //返回会话详情
+        return toVO(conversation, userId, members, users, true);
+    }
+
+    private ImConversationMember requireMember(Long conversationId, Long userId) {
+        //判断会话是否存在
+        ImConversation conversation = conversationMapper.selectById(conversationId);
+        if (conversation == null) {
+            throw BizException.of(ErrorCode.NOT_FOUND, "会话不存在");
+        }
+        // 查成员关系，left_at 为 null 才算仍在会话中
+        ImConversationMember member = memberMapper.selectOne(Wrappers.<ImConversationMember>lambdaQuery()
+                // 限定会话
+                .eq(ImConversationMember::getConversationId, conversationId)
+                // 限定用户
+                .eq(ImConversationMember::getUserId, userId)
+                // 只认未退出的成员，退群后重新入群会生成新的有效记录
+                .isNull(ImConversationMember::getLeftAt));
+        // 如果成员不存在
+        if (member == null) {
+            throw BizException.of(ErrorCode.NOT_FOUND, "你不在该会话中");
+        }
+        return member;
     }
 }

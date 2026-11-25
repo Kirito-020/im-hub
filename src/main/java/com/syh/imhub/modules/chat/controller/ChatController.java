@@ -3,10 +3,10 @@ package com.syh.imhub.modules.chat.controller;
 import com.syh.imhub.common.context.UserContext;
 import com.syh.imhub.common.result.R;
 import com.syh.imhub.modules.chat.dto.ConversationVO;
+import com.syh.imhub.modules.chat.dto.CreatConversationReq;
 import com.syh.imhub.modules.chat.service.ConversationService;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
@@ -27,5 +27,13 @@ public class ChatController {
         Long userId = UserContext.userId();
         return R.ok(conversationService.getConversionList(userId));
     }
+
+    @PostMapping("/conversations")
+    public R<ConversationVO> createConversation(@Valid @RequestBody CreatConversationReq req) {
+        //获取用户ID
+        Long userId = UserContext.userId();
+        return R.ok(conversationService.createConversation(userId, req));
+    }
+
 
 }

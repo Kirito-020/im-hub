@@ -14,4 +14,7 @@ public interface ImConversationMapper extends BaseMapper<ImConversation> {
             "            WHERE m.user_id = #{userId} AND m.left_at IS NULL\n" +
             "            ORDER BY m.pinned DESC, c.last_msg_at DESC, c.id DESC")
     List<ImConversation> selectByUser(Long userId);
+
+    @Select("SELECT * FROM im_conversation WHERE biz_key = #{bizKey}")
+    ImConversation selectByBizKey(String bizKey);
 }
