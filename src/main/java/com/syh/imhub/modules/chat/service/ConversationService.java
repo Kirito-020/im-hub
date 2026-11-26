@@ -86,7 +86,7 @@ public class ConversationService {
     * withmembers 是否需要返回成员详细信息
     * */
 
-    private ConversationVO toVO(ImConversation conversation, Long viewerId,
+    public ConversationVO toVO(ImConversation conversation, Long viewerId,
                                 List<ImConversationMember> members, Map<Long, ImUser> users, boolean withmembers) {
         //找到自己
         ImConversationMember viewer = members.stream()
@@ -151,7 +151,7 @@ public class ConversationService {
                 conversation.getLastMsgAt() == null ? conversation.getUpdatedAt() : conversation.getLastMsgAt());
     }
 
-    private MessageVO toMessageVO(ImMessage lastMessage, Map<Long, ImUser> users) {
+    public MessageVO toMessageVO(ImMessage lastMessage, Map<Long, ImUser> users) {
         //获取用户
         ImUser sender = users.get(lastMessage.getSenderId());
         //senderId=0即系统消息
@@ -295,7 +295,7 @@ public class ConversationService {
         memberMapper.insert(member);
     }
 
-    private ConversationVO detail(Long conversationId, Long userId) {
+    public ConversationVO detail(Long conversationId, Long userId) {
         //先做成员校验
         requireMember(conversationId, userId);
         //取会话本体
@@ -312,7 +312,7 @@ public class ConversationService {
         return toVO(conversation, userId, members, users, true);
     }
 
-    private ImConversationMember requireMember(Long conversationId, Long userId) {
+    public ImConversationMember requireMember(Long conversationId, Long userId) {
         //判断会话是否存在
         ImConversation conversation = conversationMapper.selectById(conversationId);
         if (conversation == null) {
@@ -332,4 +332,5 @@ public class ConversationService {
         }
         return member;
     }
+
 }

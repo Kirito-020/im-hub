@@ -1,17 +1,25 @@
 package com.syh.imhub.modules.chat.service;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.syh.imhub.modules.chat.eneity.ImConversationMember;
+import com.syh.imhub.modules.chat.mapper.ImConversationMemberMapper;
 import com.syh.imhub.modules.chat.mapper.ImMessageMapper;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
+import java.util.Map;
 
 @Service
 public class UnreadService {
     private final StringRedisTemplate redis;
     private final ImMessageMapper imMessageMapper;
+    private final ImConversationMemberMapper memberMapper;
 
-    public UnreadService(StringRedisTemplate redis, ImMessageMapper imMessageMapper) {
+    public UnreadService(StringRedisTemplate redis, ImMessageMapper imMessageMapper, ImConversationMemberMapper memberMapper) {
         this.redis = redis;
         this.imMessageMapper = imMessageMapper;
+        this.memberMapper = memberMapper;
     }
 
     private String key(Long userId) {
@@ -36,5 +44,31 @@ public class UnreadService {
         redis.opsForHash().put(key(userId), String.valueOf(conversationId), String.valueOf(count));
         //返回结果
         return (int) count;
+    }
+
+    public int getUnreadMessageCount(Long userId) {
+        //先读缓存
+        Map<Object, Object> entries = redis.opsForHash().entries(key(userId));
+        int sum=0;
+        //缓存不为空直接累加返回
+        if (!entries.isEmpty()){
+            for (Object value : entries.values()) {
+                try {
+                    sum += Integer.parseInt(value.toString());
+                } catch (NumberFormatException ignored) {
+
+                }
+            }
+            return sum;
+        }
+        //缓存为空，取数据库数据
+        List<ImConversationMember> members = memberMapper.selectList
+                (Wrappers.<ImConversationMember>lambdaQuery().eq(ImConversationMember::getUserId, userId));
+        //计算未读消息总数
+        for(ImConversationMember member : members){
+            sum += imMessageMapper.countUnread(userId, member.getConversationId(),
+                    member.getReadSeq() == null ? 0 : member.getReadSeq());
+        }
+        return sum;
     }
 }

@@ -5,10 +5,12 @@ import com.syh.imhub.common.result.R;
 import com.syh.imhub.modules.chat.dto.ConversationVO;
 import com.syh.imhub.modules.chat.dto.CreatConversationReq;
 import com.syh.imhub.modules.chat.service.ConversationService;
+import com.syh.imhub.modules.chat.service.UnreadService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 
 @RestController
@@ -16,9 +18,12 @@ import java.util.List;
 public class ChatController {
 
     private final ConversationService conversationService;
+    private final UnreadService unreadService;
 
-    public ChatController(ConversationService conversationService) {
+
+    public ChatController(ConversationService conversationService, UnreadService unreadService) {
         this.conversationService = conversationService;
+        this.unreadService = unreadService;
     }
 
     @GetMapping("/conversations")
@@ -33,6 +38,21 @@ public class ChatController {
         //获取用户ID
         Long userId = UserContext.userId();
         return R.ok(conversationService.createConversation(userId, req));
+    }
+
+    //未读消息汇总
+    @GetMapping("/conversations/unread")
+    public R<Map<String, Object>> getUnreadMessageCount() {
+        //获取用户ID
+        Long userId = UserContext.userId();
+        return R.ok(Map.of("unreadCount", unreadService.getUnreadMessageCount(userId)));
+    }
+
+    @GetMapping("/conversations/{id}")
+    public R<ConversationVO> getConversation(@PathVariable Long id) {
+        //获取用户ID
+        Long userId = UserContext.userId();
+        return R.ok(conversationService.detail(id, userId));
     }
 
 
