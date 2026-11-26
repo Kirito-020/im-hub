@@ -333,4 +333,22 @@ public class ConversationService {
         return member;
     }
 
+    public void updateMemberFlag(Long conversationId, Long userId, Boolean pinned, Boolean muted) {
+        //先确认成员
+        requireMember(conversationId, userId);
+        ImConversationMember member = new ImConversationMember();
+        //更新conversation_member
+        member.setConversationId(conversationId);
+        member.setUserId(userId);
+        if(pinned != null){
+            member.setPinned(pinned ? 1 : 0);
+        }
+        if(muted != null){
+            member.setMuted(muted ? 1 : 0);
+        }
+        //更新成员
+        memberMapper.update(member,Wrappers.<ImConversationMember>lambdaUpdate()
+                .eq(ImConversationMember::getConversationId, conversationId)
+                .eq(ImConversationMember::getUserId, userId));
+    }
 }

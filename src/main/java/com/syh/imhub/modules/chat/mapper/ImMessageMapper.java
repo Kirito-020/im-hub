@@ -13,4 +13,8 @@ public interface ImMessageMapper extends BaseMapper<ImMessage> {
     @Select("select count(*) from im_message " +
             "where conversation_id = #{conversationId} and seq > #{readSeq} and sender_id <> #{userId} and status = 1")
     long countUnread(Long userId, Long conversationId, long readSeq);
+
+    //COALESCE兜底，如果seq不存在则返回0
+    @Select("select COALESCE(MAX(seq), 0) from im_message where conversation_id = #{conversationId}")
+    long selectMaxSeq(Long conversationId);
 }
