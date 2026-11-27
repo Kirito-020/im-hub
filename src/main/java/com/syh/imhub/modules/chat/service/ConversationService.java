@@ -275,7 +275,7 @@ public class ConversationService {
             //只有曾经的群主可以重新加入
             if(exist.getLeftAt() != null){
                 LocalDateTime now = LocalDateTime.now();
-                memberMapper.updateById(exist.getId(), now,null,memberRole);
+                memberMapper.updateMemberById(exist.getId(), now,null,memberRole);
             }
             //仍然在会话中
             return;

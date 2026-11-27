@@ -82,7 +82,7 @@ public class ChatController {
         return R.ok(conversationService.detail(id, userId));
     }
 
-    @PostMapping("/message")
+    @PostMapping("/messages")
     public R<MessageVO> sendMessage(@RequestBody Map<String, Object> body) {
         Long conversationId = Long.valueOf(String.valueOf(body.get("conversationId")));
         SendMessageReq req = new SendMessageReq(String.valueOf(body.getOrDefault("clientMsgId", UUID.randomUUID().toString())),
@@ -95,6 +95,15 @@ public class ChatController {
     private Map<String, Object> castMap(Map<?,?> map) {
         return (Map<String, Object>) map;
     }
+
+    @GetMapping("/messages")
+    public R<List<MessageVO>> getMessages(@RequestParam Long conversationId,
+                                          @RequestParam(required = false) Long beforeSeq,
+                                          @RequestParam(defaultValue = "30") int size) {
+        return R.ok(messageService.historyMessages(conversationId, UserContext.userId(), beforeSeq, size));
+    }
+
+
 
 
 }

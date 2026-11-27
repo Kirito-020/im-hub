@@ -19,5 +19,5 @@ public interface ImConversationMemberMapper extends BaseMapper<ImConversationMem
     @Update("UPDATE im_conversation_member SET joined_at = #{joinedAt}, " +
             "left_at = #{leftAt}, member_role = #{memberRole} " +
             "WHERE id = #{id}")
-    void updateById(Long id, LocalDateTime joinedAt, LocalDateTime leftAt, int memberRole);
+    void updateMemberById(Long id, LocalDateTime joinedAt, LocalDateTime leftAt, int memberRole);
 }

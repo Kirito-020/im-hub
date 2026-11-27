@@ -19,9 +19,11 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -53,6 +55,7 @@ public class MessageService {
         this.memberMapper = memberMapper;
     }
 
+    @Transactional
     public MessageVO sendMessage(Long conversationId, Long senderId, SendMessageReq req) {
         //成员校验
         conversationService.requireMember(conversationId, senderId);
@@ -200,5 +203,32 @@ public class MessageService {
         }
         //一次查完
         return userMapper.selectBatchIds(ids).stream().collect(Collectors.toMap(ImUser::getId, u -> u));
+    }
+
+    public List<MessageVO> historyMessages(Long conversationId, Long userId, Long beforeSeq, int size) {
+        //会话成员校验
+        conversationService.requireMember(conversationId, userId);
+        // 夹住单页上限，防止 size 传太大把数据库拖垮
+        int limit = Math.min(Math.max(size, 1), 100);
+        var wrapper = Wrappers.<ImMessage>lambdaQuery()
+                // 限定会话
+                .eq(ImMessage::getConversationId, conversationId)
+                // 倒序，配合 LIMIT 才能拿到最新一页
+                .orderByDesc(ImMessage::getSeq)
+                // limit 已夹到安全区间，可直接拼进 SQL
+                .last("LIMIT " + limit);
+        // 只有传了有效游标才追加 seq < beforeSeq，否则就是第一页
+        if (beforeSeq != null && beforeSeq > 0) {
+            // 严格小于，避免把游标那条消息重复返回
+            wrapper.lt(ImMessage::getSeq, beforeSeq);
+        }
+        // 查询结果拷贝成可变列表
+        List<ImMessage> rows = new ArrayList<>(messageMapper.selectList(wrapper));
+        // 倒序结果翻成正序，前端按数组顺序直接渲染
+        rows.sort((a, b) -> Long.compare(a.getSeq(), b.getSeq()));
+        // 批量取发送者信息
+        Map<Long, ImUser> users = userOf(rows);
+        // 逐条转 VO 返回
+        return rows.stream().map(m -> conversationService.toMessageVO(m, users)).toList();
     }
 }
