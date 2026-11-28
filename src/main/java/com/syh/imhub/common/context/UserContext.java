@@ -38,4 +38,7 @@ public class UserContext {
     public static Long userId() {
         return require().userId();
     }
+    public static String role() {
+        return require().role();
+    }
 }

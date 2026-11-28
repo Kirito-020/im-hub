@@ -103,6 +103,17 @@ public class ChatController {
         return R.ok(messageService.historyMessages(conversationId, UserContext.userId(), beforeSeq, size));
     }
 
+    @GetMapping("/messages/sync")
+    public R<Map<Long,List<MessageVO>>> syncMessages(@RequestParam(required = false) String items) {
+        return R.ok(messageService.syncMessages(items, UserContext.userId()));
+    }
+
+    @PostMapping("/messages/recall")
+    public R<Void> recallMessage(@RequestParam Long id) {
+        messageService.recallMessage(id, UserContext.userId());
+        return R.ok();
+    }
+
 
 
 

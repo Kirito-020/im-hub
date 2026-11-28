@@ -22,4 +22,9 @@ public class PresenceService {
     public boolean isOnline(Long userId) {
         return userId != null && Boolean.TRUE.equals(redis.hasKey(PREFIX + userId));
     }
+
+    public void online(Long userId){
+        redis.opsForValue().set(PREFIX + userId, "1", TTL);
+    }
+
 }

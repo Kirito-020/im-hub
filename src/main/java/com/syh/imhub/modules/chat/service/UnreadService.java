@@ -71,4 +71,8 @@ public class UnreadService {
         }
         return sum;
     }
+
+    public void increment(Long userId, long conversationId, int delta) {
+        redis.opsForHash().increment(key(userId), String.valueOf(conversationId), delta);
+    }
 }

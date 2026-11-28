@@ -351,4 +351,15 @@ public class ConversationService {
                 .eq(ImConversationMember::getConversationId, conversationId)
                 .eq(ImConversationMember::getUserId, userId));
     }
+
+    public List<Long> memberIds(Long conversationId) {
+        return memberMapper.selectList(Wrappers.<ImConversationMember>lambdaQuery()
+                .eq(ImConversationMember::getConversationId, conversationId)
+                // 限定未退出的成员
+                .isNull(ImConversationMember::getLeftAt))
+                .stream()
+                // 提取用户 ID
+                .map(ImConversationMember::getUserId)
+                .toList();
+    }
 }

@@ -4,29 +4,34 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.syh.imhub.common.exception.BizException;
 import com.syh.imhub.common.exception.ErrorCode;
+import com.syh.imhub.infra.config.KafkaConfig;
+import com.syh.imhub.infra.mq.DispatchPayload;
+import com.syh.imhub.infra.mq.EventPublisher;
+import com.syh.imhub.infra.ws.WsSessionRegistry;
 import com.syh.imhub.modules.admin.service.SensitiveWordService;
 import com.syh.imhub.modules.chat.dto.MessageVO;
 import com.syh.imhub.modules.chat.dto.SendMessageReq;
 import com.syh.imhub.modules.chat.eneity.ImConversation;
 import com.syh.imhub.modules.chat.eneity.ImConversationMember;
 import com.syh.imhub.modules.chat.eneity.ImMessage;
+import com.syh.imhub.modules.chat.event.CustomerMessageEvent;
 import com.syh.imhub.modules.chat.mapper.ImConversationMapper;
 import com.syh.imhub.modules.chat.mapper.ImConversationMemberMapper;
 import com.syh.imhub.modules.chat.mapper.ImMessageMapper;
 import com.syh.imhub.modules.user.entity.ImUser;
 import com.syh.imhub.modules.user.mapper.ImUserMapper;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -40,10 +45,17 @@ public class MessageService {
     private final ObjectMapper objectMapper;
     private final ImConversationMapper conversationMapper;
     private final ImConversationMemberMapper memberMapper;
+    private final EventPublisher eventPublisher;
+    private final ApplicationEventPublisher applicationEventPublisher;
+    private final WsSessionRegistry registry;
 
 
     public MessageService(ConversationService conversationService, StringRedisTemplate redis,
-                          @Value("${im.rate-limit.msg-per-10s:10}") int msgPer10s, ImMessageMapper messageMapper, ImUserMapper userMapper, SensitiveWordService sensitiveWordService, ObjectMapper objectMapper, ImConversationMapper conversationMapper, ImConversationMemberMapper memberMapper) {
+                          @Value("${im.rate-limit.msg-per-10s:10}") int msgPer10s, ImMessageMapper messageMapper, ImUserMapper userMapper,
+                          SensitiveWordService sensitiveWordService, ObjectMapper objectMapper,
+                          ImConversationMapper conversationMapper, ImConversationMemberMapper memberMapper,
+                          EventPublisher eventPublisher, ApplicationEventPublisher applicationEventPublisher,
+                          WsSessionRegistry registry) {
         this.conversationService = conversationService;
         this.redis = redis;
         this.msgPer10s = msgPer10s;
@@ -53,6 +65,9 @@ public class MessageService {
         this.objectMapper = objectMapper;
         this.conversationMapper = conversationMapper;
         this.memberMapper = memberMapper;
+        this.eventPublisher = eventPublisher;
+        this.applicationEventPublisher = applicationEventPublisher;
+        this.registry = registry;
     }
 
     @Transactional
@@ -163,7 +178,36 @@ public class MessageService {
         Map<Long, ImUser> users = userOf(List.of(message));
         //生成vo,同时作为Kafka与Ws的payload
         MessageVO vo = conversationService.toMessageVO(message, users);
+        //去会话成员id作为广播目标
+        List<Long> memberIds = conversationService.memberIds(conversationId);
+
+        //投dispatch topic
+        eventPublisher.publish(KafkaConfig.TOPIC_DISPATCH, String.valueOf(conversationId), "IM_MESSAGE_CREATED",
+                new DispatchPayload("MSG",conversationId,memberIds,vo));
+        //投side_effect topic
+        eventPublisher.publish(KafkaConfig.TOPIC_SIDE_EFFECT, String.valueOf(conversationId), "IM_MESSAGE_CREATED",
+                new DispatchPayload("MSG",conversationId,memberIds,vo));
+
+        //发布进程内事件
+        applicationEventPublisher.publishEvent(new CustomerMessageEvent(conversationId, senderId, message.getId()));
+        // 事务提交后再推 WS，避免前端收到消息却查不到，回滚时也不会误推
+        afterCommit(() -> registry.sendToUsers(memberIds, Map.of(
+                // 本实例的连接直接推；其它实例的连接由 Kafka 消费者补推
+                "type", "MSG", "conversationId", conversationId, "data", vo)));
         return vo;
+    }
+
+    private void afterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+        }else {
+            action.run();
+        }
     }
 
     private String toJson(Object value) {
@@ -230,5 +274,62 @@ public class MessageService {
         Map<Long, ImUser> users = userOf(rows);
         // 逐条转 VO 返回
         return rows.stream().map(m -> conversationService.toMessageVO(m, users)).toList();
+    }
+
+    public Map<Long, List<MessageVO>> syncMessages(String items, Long userId) {
+        // 用 LinkedHashMap 保留请求里的会话顺序
+        Map<Long, List<MessageVO>> result = new LinkedHashMap<>();
+        // 没有增量参数就返回空结果，不查库
+        if (items == null || items.isBlank()) {
+            // 早退
+            return result;
+        }
+        // 逐个会话处理，单个会话出错不影响其它会话
+        for (String item : items.split(",")) {
+            // 按冒号切成 conversationId 与 lastSeq 两段
+            String[] parts = item.split(":");
+            // 段数不对说明格式非法，跳过该分段
+            if (parts.length != 2) {
+                // 跳过
+                continue;
+            }
+            // 会话 ID，与下面的 lastSeq 一起在 try 内解析，失败就整段跳过
+            Long conversationId;
+            // 本地已有的最大 seq
+            long lastSeq;
+            // 解析这一段，格式不合法会在 catch 里被跳过
+            try {
+                // 会话 ID
+                conversationId = Long.valueOf(parts[0].trim());
+                // 只拉取比本地更新的消息
+                lastSeq = Long.parseLong(parts[1].trim());
+                // 数字解析失败：跳过本段，不中断其它会话的同步
+            } catch (NumberFormatException e) {
+                // 非法数字直接忽略该分段，不影响其它会话同步
+                continue;
+            }
+            // 每个会话都单独校验成员身份，防止用 items 探测别人的会话
+            conversationService.requireMember(conversationId, userId);
+            // 查该会话 seq 大于 lastSeq 的消息
+            List<ImMessage> rows = messageMapper.selectList(Wrappers.<ImMessage>lambdaQuery()
+                    // 限定会话
+                    .eq(ImMessage::getConversationId, conversationId)
+                    // 只要本地还没有的新消息
+                    .gt(ImMessage::getSeq, lastSeq)
+                    // 升序，前端按顺序追加
+                    .orderByAsc(ImMessage::getSeq)
+                    // 单会话最多补 200 条，剩余部分等下次同步
+                    .last("LIMIT 200"));
+            // 批量取发送者
+            Map<Long, ImUser> users = userOf(rows);
+            // 转 VO 后按会话放进结果集
+            result.put(conversationId, rows.stream().map(m -> conversationService.toMessageVO(m, users)).toList());
+        }
+        // 返回按请求顺序排列的会话到消息列表的映射
+        return result;
+    }
+
+    public void recallMessage(Long id, Long userId) {
+        //
     }
 }
